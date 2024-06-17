@@ -90,7 +90,7 @@ def draw_sections(stats: numpy.ndarray, boundaries: list) -> numpy.ndarray:
         
     return stats
 
-async def main(retreive: bool):
+async def main(retreive: bool, copy_text: bool):
     loop = asyncio.get_event_loop()
     file = discord.File("stats/wr1.png")
     
@@ -113,13 +113,13 @@ async def main(retreive: bool):
     sections   = draw_sections(stats, boundaries)
 
     if retreive:
-        await send_to_google(sections, subcategory)
+        await send_to_google(sections, subcategory, copy_text)
     else:
         cv2.imshow("Stats", sections)
         cv2.waitKey(0) 
         cv2.destroyAllWindows()
     
-async def send_to_google(sections, subcategory: str):
+async def send_to_google(sections, subcategory: str, copy_text: bool):
     client  = vision_v1.ImageAnnotatorAsyncClient()
     
     image   = vision_v1.types.Image(content=cv2.imencode('.png', sections)[1].tobytes())
@@ -129,7 +129,10 @@ async def send_to_google(sections, subcategory: str):
     response = await client.batch_annotate_images(requests=[request])
     text     = response.responses[0].full_text_annotation.text
 
-    pyperclip.copy(text)
+    if copy_text:
+        pyperclip.copy(text)
+    else:
+        print(text)
 
     stats    = [x for x in re.split(r"\n?[0-9]{0,2}?.? ?@", text) if x]
 
@@ -154,4 +157,4 @@ async def send_to_google(sections, subcategory: str):
     else:
         raise NotImplementedError("Only passer stats are completed")
     
-asyncio.run(main(retreive=False))
+asyncio.run(main(retreive=False, copy_text=True))
