@@ -202,7 +202,7 @@ async def send_to_google(sections, subcategory: str, columns: list, rows: list):
             print(f"{name:<30} {qbr:^10} {comp:^10} {att:^10} {tds:^10} {ints:^10} {sacks:^10} {yards:^10} {long:^10} {conflicts or ''}")
 
     elif subcategory == "receiver":
-        print("{:<30} {:^10} {:^10} {:^10} {:^10} {:^10} {:^10} {:^10} {:^10} {:^10}".format('Player', 'Catches', 'Targets', 'TDs', 'Ints All.', 'YAC', 'Yards', 'Yards', 'Long', 'Conflicts'))
+        print("{:<30} {:^10} {:^10} {:^10} {:^10} {:^10} {:^10} {:^10} {:^10}".format('Player', 'Catches', 'Targets', 'TDs', 'Ints All.', 'YAC', 'Yards', 'Long', 'Conflicts'))
         for cols in groups.values():
             name, catches, targets, tds, ints_all, yac, yards, long, *conflicts = (''.join(x) for x in cols.values() if x)
 
@@ -210,8 +210,23 @@ async def send_to_google(sections, subcategory: str, columns: list, rows: list):
 
             print(f"{name:<30} {catches:^10} {targets:^10} {tds:^10} {ints_all:^10} {yac:^10} {yards:^10} {long:^10} {conflicts or ''}")
 
-    else:
-        raise NotImplementedError("Only passer & receiver stats are completed")
+    elif subcategory == "corner":
+        print("{:<30} {:^10} {:^10} {:^10} {:^10} {:^10} {:^10} {:^10} {:^10}".format('Player', 'Ints', 'DBR', 'Deny-rate', 'Targets', 'Swats', 'TDs', 'Comp All.', 'Conflicts'))
+        for cols in groups.values():
+            name, ints, dbr, deny_rate, targets, swats, tds, comp_all,  *conflicts = (''.join(x) for x in cols.values() if x)
+
+            name = re.sub(r'(\d+)?@', '', name)
+
+            print(f"{name:<30} {ints:^10} {dbr:^10} {deny_rate:^10} {targets:^10} {swats:^10} {tds:^10} {comp_all:^10} {conflicts or ''}")
+
+    elif subcategory == "defender":
+        print("{:<30} {:^10} {:^10} {:^10} {:^10} {:^10} {:^10} {:^10}".format('Player', 'Tackles', 'Misses', 'Sacks', 'Safeties', 'For. Fumb.', 'Rec. Fumb.', 'Conflicts'))
+        for cols in groups.values():
+            name, tackles, misses, sacks, safeties, force_fumb, rec_fumb, *conflicts = (''.join(x) for x in cols.values() if x)
+
+            name = re.sub(r'(\d+)?@', '', name)
+
+            print(f"{name:<30} {tackles:^10} {misses:^10} {sacks:^10} {safeties:^10} {force_fumb:^10} {rec_fumb:^10} {conflicts or ''}")
     
 async def main(retreive: bool, path: Optional[str]=None):
     if path:
@@ -220,4 +235,9 @@ async def main(retreive: bool, path: Optional[str]=None):
     for path in os.listdir('stats'):
         await get_stats(path=f"stats/{path}", retreive=retreive)
 
-asyncio.run(main(retreive=True, path='stats/qb1.png'))
+asyncio.run(main(retreive=True, path='stats/d4.png'))
+
+# TODO
+# try to fix extra 0s and double numbers (ex. result is 5050 yards instead of 50 or result is 70 tds instead of 7)
+# convert o's to 0s and get rid of non-digit characters
+# overall refinement
