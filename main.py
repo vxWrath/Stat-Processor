@@ -147,13 +147,13 @@ async def get_stats(path: str, retreive: bool):
     sections = draw_sections(stats, columns, rows)
 
     if retreive:
-        await send_to_google(sections, subcategory, rows + [sections.shape[0]])
+        await send_to_google(sections, subcategory, columns + [sections.shape[1]], rows + [sections.shape[0]])
     else:
         cv2.imshow(path, sections)
         cv2.waitKey(0) 
         cv2.destroyAllWindows()
     
-async def send_to_google(sections, subcategory: str, boundaries: List[int]):
+async def send_to_google(sections, subcategory: str, columns: list, rows: list):
     client  = vision_v1.ImageAnnotatorAsyncClient()
     
     image   = vision_v1.types.Image(content=cv2.imencode('.png', sections)[1].tobytes())
@@ -161,52 +161,54 @@ async def send_to_google(sections, subcategory: str, boundaries: List[int]):
     request = vision_v1.AnnotateImageRequest(image=image, features=[feature])
     
     response = await client.batch_annotate_images(requests=[request])
-    bounds   = []
 
+    bounds = []
     for page in response.responses[0].full_text_annotation.pages:
         for block in page.blocks:
             for paragraph in block.paragraphs:
                 for word in paragraph.words:
                     bounds.append(([s.text for s in word.symbols], word.bounding_box))
 
-    sections = {x: [] for x in boundaries}
+    sections = {x: [] for x in rows}
 
     for symbols, bound in bounds:
         y = max([v.y for v in bound.vertices])
 
-        for pos in boundaries:
+        for pos in rows:
             if y < pos:
                 sections[pos].append((symbols, bound))
                 break
 
     sections = [sorted(section, key=lambda item: item[1].vertices[0].x) for section in sections.values()]
+    groups   = {row: {col: [] for col in columns} for row in rows}
 
-    if subcategory.lower() == "passer":
-        print("    {0:<22} {1:<8} {2:<5} {3:<5} {4:<5} {5:<5} {6:<5} {7:<5} {8}".format('PLAYER', 'QBR', 'CMP', 'ATT', 'TD', 'INT', 'S', 'Y', 'L', 'CONFLICTS'))
-        for i, section in enumerate(sections):
-            words = [''.join(symbols) for symbols, bound in section]
+    for i, section in enumerate(sections):
+        for symbols, bound in section:
+            x = min([v.x for v in bound.vertices])
+            for col in columns:
+                if x < col:
+                    groups[rows[i]][col].append(''.join(symbols))
+                    break
 
-            num, name, qbr, comp_str, tds, ints, sacks, yards, long, *conflicts = (x.replace('@', '') for x in words if x != '@')
-            
-            comp_att_match = re.search("[0-9]+/[0-9]+", comp_str)
-            if comp_att_match:
-                comp, att = comp_att_match.group().split('/')
-            else:
-                comp, att = '0', '0'
+    if subcategory == "passer":
+        print("{:<30} {:^10} {:^10} {:^10} {:^10} {:^10} {:^10} {:^10} {:^10} {:^10}".format('Player', 'QBR', 'Comp.', 'Att.', 'TDs', 'Ints', 'Sacks', 'Yards', 'Long', 'Conflicts'))
+        
+        for cols in groups.values():
+            name, qbr, comp_str, tds, ints, sacks, yards, long, *conflicts = (''.join(x) for x in cols.values())
 
-            print(f"{num:>2}. {name:<22} {qbr:<5} {comp:<5} {att:<5} {tds:<5} {ints:<5} {sacks:<5} {yards:<5} {long:<5} {conflicts}")
+            name      = re.sub(r'(\d+)?@', '', name)
+            comp, att = re.search(r'\d+%\((\d+)\/(\d+)\)', comp_str).groups()
 
-    elif subcategory.lower() == "receiver":
-        print("    {0:<22} {1:<5} {2:<5} {3:<5} {4:<5} {5:<5} {6:<5} {7:<5} {8}".format('PLAYER', 'C', 'T', 'TD', 'IA', 'YAC', 'Y', 'L', 'CONFLICTS'))
-        for i, section in enumerate(sections):
-            words = [''.join(symbols) for symbols, bound in section]
-            
-            if not words[0].isdigit():
-                words.insert(0, str(i+1))
+            print(f"{name:<30} {qbr:^10} {comp:^10} {att:^10} {tds:^10} {ints:^10} {sacks:^10} {yards:^10} {long:^10} {conflicts or ''}")
 
-            num, name, catches, targets, tds, ints_allowed, yac, yards, long, *conflicts = (x.replace('@', '') for x in words if x != '@')
+    elif subcategory == "receiver":
+        print("{:<30} {:^10} {:^10} {:^10} {:^10} {:^10} {:^10} {:^10} {:^10} {:^10}".format('Player', 'Catches', 'Targets', 'TDs', 'Ints All.', 'YAC', 'Yards', 'Yards', 'Long', 'Conflicts'))
+        for cols in groups.values():
+            name, catches, targets, tds, ints_all, yac, yards, long, *conflicts = (''.join(x) for x in cols.values() if x)
 
-            print(f"{num:>2}. {name:<22} {catches:<5} {targets:<5} {tds:<5} {ints_allowed:<5} {yac:<5} {yards:<5} {long:<5} {conflicts}")
+            name = re.sub(r'(\d+)?@', '', name)
+
+            print(f"{name:<30} {catches:^10} {targets:^10} {tds:^10} {ints_all:^10} {yac:^10} {yards:^10} {long:^10} {conflicts or ''}")
 
     else:
         raise NotImplementedError("Only passer & receiver stats are completed")
@@ -218,4 +220,4 @@ async def main(retreive: bool, path: Optional[str]=None):
     for path in os.listdir('stats'):
         await get_stats(path=f"stats/{path}", retreive=retreive)
 
-asyncio.run(main(path='stats/wr2.png', retreive=False))
+asyncio.run(main(retreive=True, path='stats/qb1.png'))
