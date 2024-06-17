@@ -4,11 +4,12 @@ import discord
 import numpy
 import pytesseract
 import os
-import re
-from google.cloud import vision_v1
-from typing import Optional, List
-from concurrent.futures import ThreadPoolExecutor
 import pyperclip
+import re
+
+from concurrent.futures import ThreadPoolExecutor
+from google.cloud import vision_v1
+from typing import List
 
 pytesseract.pytesseract.tesseract_cmd = 'C:\\Program Files\\Tesseract-OCR\\tesseract.exe'
 os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = f"credentials.json"
