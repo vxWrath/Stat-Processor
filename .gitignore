@@ -1,2 +1,5 @@
-/test.py
+/test*
 /credentials.json
+/result
+/cropped.png
+/result.png
