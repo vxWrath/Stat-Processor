@@ -70,14 +70,14 @@ async def find_stat_box(loop: asyncio.AbstractEventLoop, image) -> numpy.ndarray
         
         return image[y:y+h, x:x+w]
     
-def find_boundaries(stats: numpy.ndarray, threshold: Optional[int]=17) -> List[int]:
-    row_means = numpy.mean(stats, axis=1)
+def find_boundaries(stats: numpy.ndarray) -> List[int]:
+    row_means   = numpy.mean(stats, axis=1)
     differences = numpy.abs(numpy.diff(row_means))
     
     if not len(row_means) or not len(differences):
         raise ValueError("There are no sections")
     
-    boundaries = [i + 1 for i, diff in enumerate(differences) if diff > threshold]
+    boundaries = [i + 1 for i, diff in enumerate(differences) if diff > 19]
     
     if not len(boundaries) > 1:
         raise ValueError("There are not atleast two sections")
