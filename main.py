@@ -10,6 +10,8 @@ from concurrent.futures import ThreadPoolExecutor
 from google.cloud import vision_v1
 from typing import List, Optional
 
+import pickle
+
 pytesseract.pytesseract.tesseract_cmd = 'C:\\Program Files\\Tesseract-OCR\\tesseract.exe'
 os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = f"credentials.json"
 
@@ -161,6 +163,15 @@ async def send_to_google(sections, subcategory: str, columns: list, rows: list):
     request = vision_v1.AnnotateImageRequest(image=image, features=[feature])
     
     response = await client.batch_annotate_images(requests=[request])
+
+    if True:
+        with open('result', 'wb') as f:
+            pickle.dump(response.responses[0].full_text_annotation, f)
+
+        print(columns)
+        print(rows)
+
+        cv2.imwrite('cropped.png', sections)
 
     bounds = []
     for page in response.responses[0].full_text_annotation.pages:
