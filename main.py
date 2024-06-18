@@ -134,7 +134,7 @@ async def get_stats(path: str, retreive: bool):
     category, subcategory = await find_stat_category(loop, image)
 
     print(f"   Category: {category}")
-    print(f"Subcategory: {subcategory}")
+    print(f"Subcategory: {subcategory}\n")
     
     if category.lower() != "current game":
         raise ValueError(f"The stat category must be current game and not {category.lower()}")
@@ -181,14 +181,20 @@ async def send_to_google(sections, subcategory: str, columns: list, rows: list):
 
     sections = [sorted(section, key=lambda item: item[1].vertices[0].x) for section in sections.values()]
     groups   = {row: {col: [] for col in columns} for row in rows}
+    entries  = set()
 
     for i, section in enumerate(sections):
         for symbols, bound in section:
             x = min([v.x for v in bound.vertices])
             for col in columns:
                 if x < col:
-                    groups[rows[i]][col].append(''.join(symbols))
-                    break
+                    entry = (rows[i], col, ''.join(symbols))
+
+                    if entry not in entries:
+                        groups[rows[i]][col].append(''.join(symbols))
+                        entries.add(entry)
+
+                        break
 
     if subcategory == "passer":
         print("{:<30} {:^10} {:^10} {:^10} {:^10} {:^10} {:^10} {:^10} {:^10} {:^10}".format('Player', 'QBR', 'Comp.', 'Att.', 'TDs', 'Ints', 'Sacks', 'Yards', 'Long', 'Conflicts'))
@@ -235,9 +241,9 @@ async def main(retreive: bool, path: Optional[str]=None):
     for path in os.listdir('stats'):
         await get_stats(path=f"stats/{path}", retreive=retreive)
 
-asyncio.run(main(retreive=True, path='stats/d4.png'))
+asyncio.run(main(retreive=True, path='stats/qb2.png'))
 
 # TODO
-# try to fix extra 0s and double numbers (ex. result is 5050 yards instead of 50 or result is 70 tds instead of 7)
+# try to fix extra 0s (ex. result is 70 tds instead of 7)
 # convert o's to 0s and get rid of non-digit characters
 # overall refinement
