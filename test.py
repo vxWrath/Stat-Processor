@@ -112,12 +112,13 @@ entries  = set()
 for i, section in enumerate(sections):
     for symbols, bound in section:
         x = min(v.x for v in bound.vertices)
+    
         for col in columns:
             if x < col:
                 entry = (rows[i], col, ''.join(x.text for x in symbols))
 
                 if entry not in entries:
-                    groups[rows[i]][col].append(''.join(x.text for x in symbols))
+                    groups[rows[i]][col].append(entry[2])
                     entries.add(entry)
 
                 break
@@ -126,9 +127,13 @@ if subcategory == "passer":
     print("{:<30} {:^10} {:^10} {:^10} {:^10} {:^10} {:^10} {:^10} {:^10} {:^10}".format('Player', 'QBR', 'Comp.', 'Att.', 'TDs', 'Ints', 'Sacks', 'Yards', 'Long', 'Conflicts'))
     
     for cols in groups.values():
-        name, qbr, comp_str, tds, ints, sacks, yards, long, *conflicts = (''.join(x) for x in cols.values())
+        name, qbr, comp_str, tds, ints, sacks, yards, long, *conflicts = (''.join(x) if x else 'X' for x in cols.values())
+
         name = re.sub(r'(\d+)?@', '', name)
         comp, att = re.search(r'\d+%\((\d+)\/(\d+)\)', comp_str).groups()
+
+        conflicts = [x for x in conflicts if x and x != 'X']
+
         print(f"{name:<30} {qbr:^10} {comp:^10} {att:^10} {tds:^10} {ints:^10} {sacks:^10} {yards:^10} {long:^10} {conflicts or ''}")
 
 image.save('result.png')

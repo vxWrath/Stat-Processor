@@ -159,7 +159,7 @@ async def send_to_google(sections, subcategory: str, columns: list, rows: list):
     client  = vision_v1.ImageAnnotatorAsyncClient()
     
     image   = vision_v1.types.Image(content=cv2.imencode('.png', sections)[1].tobytes())
-    feature = vision_v1.types.Feature(type_=vision_v1.Feature.Type.TEXT_DETECTION)
+    feature = vision_v1.types.Feature(type_=vision_v1.Feature.Type.DOCUMENT_TEXT_DETECTION)
     request = vision_v1.AnnotateImageRequest(image=image, features=[feature])
     
     response = await client.batch_annotate_images(requests=[request])
