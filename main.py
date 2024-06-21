@@ -8,7 +8,7 @@ import re
 
 from concurrent.futures import ThreadPoolExecutor
 from google.cloud import vision_v1
-from typing import List, Optional
+from typing import List, Optional, Dict
 
 import pickle
 
@@ -149,7 +149,7 @@ async def get_stats(path: str, retreive: bool):
     sections = draw_sections(stats, columns, rows)
 
     if retreive:
-        await send_to_google(sections, subcategory, columns + [sections.shape[1]], rows + [sections.shape[0]])
+        await send_to_google(sections, subcategory, [0] + columns + [sections.shape[1]], [0] + rows + [sections.shape[0]])
     else:
         cv2.imshow(path, sections)
         cv2.waitKey(0) 
@@ -173,77 +173,49 @@ async def send_to_google(sections, subcategory: str, columns: list, rows: list):
 
         cv2.imwrite('cropped.png', sections)
 
-    bounds = []
+    grid: Dict[int, Dict[int, List[vision_v1.Symbol]]] = {
+        row: {
+            col: [] for col in columns
+        } for row in rows
+    }
+
+    entries = set()
     for page in response.responses[0].full_text_annotation.pages:
         for block in page.blocks:
             for paragraph in block.paragraphs:
                 for word in paragraph.words:
-                    bounds.append(([s.text for s in word.symbols], word.bounding_box))
+                    row   = [row for row in rows if word.bounding_box.vertices[-1].y < row][0]
+                    col   = [col for col in columns if word.bounding_box.vertices[0].x < col][0]
+                    entry = (row, col, ''.join(x.text for x in word.symbols))
 
-    sections = {x: [] for x in rows}
+                    if entry in entries:
+                        continue
 
-    for symbols, bound in bounds:
-        y = max([v.y for v in bound.vertices])
+                    entries.add(entry)
 
-        for pos in rows:
-            if y < pos:
-                sections[pos].append((symbols, bound))
-                break
+                    for symbol in word.symbols:
+                        row = [row for row in rows if symbol.bounding_box.vertices[-1].y < row][0]
+                        col = [col for col in columns if symbol.bounding_box.vertices[0].x < col][0]
 
-    sections = [sorted(section, key=lambda item: item[1].vertices[0].x) for section in sections.values()]
-    groups   = {row: {col: [] for col in columns} for row in rows}
-    entries  = set()
+                        grid[row][col].append(symbol)
 
-    for i, section in enumerate(sections):
-        for symbols, bound in section:
-            x = min([v.x for v in bound.vertices])
-            for col in columns:
-                if x < col:
-                    entry = (rows[i], col, ''.join(symbols))
+    for i in range(1, len(rows)):
+        for j in range(1, len(columns)):
+            if not grid[rows[i]][columns[j]]:
+                confidence = 0
+            else:
+                confidence = numpy.average([x.confidence for x in grid[rows[i]][columns[j]]])
 
-                    if entry not in entries:
-                        groups[rows[i]][col].append(''.join(symbols))
-                        entries.add(entry)
+            if confidence < 0.8:
+                roi    = sections[rows[i-1]+2:rows[i]-2, columns[j-1]+2:columns[j]-2]
+                output = pytesseract.image_to_string(roi, lang='eng', config='--oem 1 --psm 10')
+                print(f"'{output.strip()}'", end=', ')
+                continue
 
-                        break
-
-    if subcategory == "passer":
-        print("{:<30} {:^10} {:^10} {:^10} {:^10} {:^10} {:^10} {:^10} {:^10} {:^10}".format('Player', 'QBR', 'Comp.', 'Att.', 'TDs', 'Ints', 'Sacks', 'Yards', 'Long', 'Conflicts'))
-        
-        for cols in groups.values():
-            name, qbr, comp_str, tds, ints, sacks, yards, long, *conflicts = (''.join(x) for x in cols.values())
-
-            name      = re.sub(r'(\d+)?@', '', name)
-            comp, att = re.search(r'\d+%\((\d+)\/(\d+)\)', comp_str).groups()
-
-            print(f"{name:<30} {qbr:^10} {comp:^10} {att:^10} {tds:^10} {ints:^10} {sacks:^10} {yards:^10} {long:^10} {conflicts or ''}")
-
-    elif subcategory == "receiver":
-        print("{:<30} {:^10} {:^10} {:^10} {:^10} {:^10} {:^10} {:^10} {:^10}".format('Player', 'Catches', 'Targets', 'TDs', 'Ints All.', 'YAC', 'Yards', 'Long', 'Conflicts'))
-        for cols in groups.values():
-            name, catches, targets, tds, ints_all, yac, yards, long, *conflicts = (''.join(x) for x in cols.values() if x)
-
-            name = re.sub(r'(\d+)?@', '', name)
-
-            print(f"{name:<30} {catches:^10} {targets:^10} {tds:^10} {ints_all:^10} {yac:^10} {yards:^10} {long:^10} {conflicts or ''}")
-
-    elif subcategory == "corner":
-        print("{:<30} {:^10} {:^10} {:^10} {:^10} {:^10} {:^10} {:^10} {:^10}".format('Player', 'Ints', 'DBR', 'Deny-rate', 'Targets', 'Swats', 'TDs', 'Comp All.', 'Conflicts'))
-        for cols in groups.values():
-            name, ints, dbr, deny_rate, targets, swats, tds, comp_all,  *conflicts = (''.join(x) for x in cols.values() if x)
-
-            name = re.sub(r'(\d+)?@', '', name)
-
-            print(f"{name:<30} {ints:^10} {dbr:^10} {deny_rate:^10} {targets:^10} {swats:^10} {tds:^10} {comp_all:^10} {conflicts or ''}")
-
-    elif subcategory == "defender":
-        print("{:<30} {:^10} {:^10} {:^10} {:^10} {:^10} {:^10} {:^10}".format('Player', 'Tackles', 'Misses', 'Sacks', 'Safeties', 'For. Fumb.', 'Rec. Fumb.', 'Conflicts'))
-        for cols in groups.values():
-            name, tackles, misses, sacks, safeties, force_fumb, rec_fumb, *conflicts = (''.join(x) for x in cols.values() if x)
-
-            name = re.sub(r'(\d+)?@', '', name)
-
-            print(f"{name:<30} {tackles:^10} {misses:^10} {sacks:^10} {safeties:^10} {force_fumb:^10} {rec_fumb:^10} {conflicts or ''}")
+            for symbol in grid[rows[i]][columns[j]]:
+                print(symbol.text, end='')
+            print(', ', end='')
+        print()
     
 async def main(retreive: bool, path: Optional[str]=None):
     if path:
@@ -252,9 +224,8 @@ async def main(retreive: bool, path: Optional[str]=None):
     for path in os.listdir('stats'):
         await get_stats(path=f"stats/{path}", retreive=retreive)
 
-asyncio.run(main(retreive=True, path='stats/qb2.png'))
+asyncio.run(main(retreive=True, path='stats/c2.png'))
 
 # TODO
-# try to fix extra 0s (ex. result is 70 tds instead of 7)
-# convert o's to 0s and get rid of non-digit characters
+# fix double bounding boxes (run test.py with stats/c2.png to see example)
 # overall refinement

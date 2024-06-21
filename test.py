@@ -1,139 +1,84 @@
-from PIL import Image, ImageDraw
-from google.cloud import vision_v1
-
+import cv2
+import numpy
 import pickle
+import pytesseract
 import re
-from typing import List
+
+from google.cloud import vision_v1
+from typing import List, Dict
+
+pytesseract.pytesseract.tesseract_cmd = 'C:\\Program Files\\Tesseract-OCR\\tesseract.exe'
 
 with open('result', 'rb') as f:
     document: vision_v1.TextAnnotation = pickle.load(f)
 
-columns = [350, 546, 818, 990, 1202, 1402, 1629, 1755]
-rows    = [52, 105, 157, 210, 262, 315, 368, 420, 473, 509]
+grid_text = """
+[0, 358, 546, 786, 1002, 1202, 1414, 1626, 1755]
+[0, 52, 105, 157, 210, 262, 315, 368, 420, 473, 509]
+"""
 
-subcategory = "passer"
+columns = [int(''.join([x for x in num if x.isdigit()])) for num in grid_text.split('\n')[1].split(', ')]
+rows    = [int(''.join([x for x in num if x.isdigit()])) for num in grid_text.split('\n')[2].split(', ')]
 
-def draw_boxes(image, bounds, color):
-    draw = ImageDraw.Draw(image)
+grid: Dict[int, Dict[int, List[vision_v1.Symbol]]] = {
+    row: {
+        col: [] for col in columns
+    } for row in rows
+}
 
-    for symbols, bound in bounds:
-        word = ''.join([x.text for x in symbols])
-
-        draw.polygon(
-            [
-                bound.vertices[0].x, bound.vertices[0].y,
-                bound.vertices[1].x, bound.vertices[1].y,
-                bound.vertices[2].x, bound.vertices[2].y,
-                bound.vertices[3].x, bound.vertices[3].y,
-            ],
-            outline='blue' if word == '2' else color
-        )
-
-    return image
-
-def does_cross(bound: vision_v1.BoundingPoly):
-    vertices = bound.vertices
-    for i in range(len(vertices)):
-        y1 = vertices[i].y
-        y2 = vertices[(i + 1) % len(vertices)].y
-
-        for target in rows:
-            if (y1 <= target <= y2) or (y2 <= target <= y1):
-                return (True, target)
-            
-    return (False, None)
-
-def create_bound(symbols: List[vision_v1.Symbol]) -> vision_v1.BoundingPoly:
-    if not symbols:
-        return vision_v1.BoundingPoly(vertices=[])
-    
-    x_coords = [v.x for symbol in symbols for v in symbol.bounding_box.vertices]
-    y_coords = [v.y for symbol in symbols for v in symbol.bounding_box.vertices]
-
-    return vision_v1.BoundingPoly(vertices=[
-        vision_v1.Vertex(x=min(x_coords), y=min(y_coords)),
-        vision_v1.Vertex(x=max(x_coords), y=min(y_coords)),
-        vision_v1.Vertex(x=max(x_coords), y=max(y_coords)),
-        vision_v1.Vertex(x=min(x_coords), y=max(y_coords))
-    ])
-
-def split_bound(symbols: List[vision_v1.Symbol], row: int):
-    above_symbols = []
-    below_symbols = []
-
-    for symbol in symbols:
-        ys = [v.y for v in symbol.bounding_box.vertices]
-
-        if all(y < row for y in ys):
-            above_symbols.append(symbol)
-        elif all(y > row for y in ys):
-            below_symbols.append(symbol)
-        else:
-            return []
-        
-    return [(above_symbols, create_bound(above_symbols)), (below_symbols, create_bound(below_symbols))]
-
-image  = Image.open('cropped.png')
-bounds = []
-
+entries = set()
 for page in document.pages:
     for block in page.blocks:
         for paragraph in block.paragraphs:
             for word in paragraph.words:
-                bounds.append((word.symbols, word.bounding_box))
+                row   = [row for row in rows if word.bounding_box.vertices[-1].y < row][0]
+                col   = [col for col in columns if word.bounding_box.vertices[0].x < col][0]
+                entry = (row, col, ''.join(x.text for x in word.symbols))
 
-all_new_bounds = []
-for symbols, bound in bounds:
-    crosses, row = does_cross(bound)
-    if crosses:
-        split_bounds = split_bound(symbols, row)
+                if entry in entries:
+                    continue
 
-        for split_bound_ in split_bounds:
-            all_new_bounds.append(split_bound_)
+                entries.add(entry)
 
-    else:
-        all_new_bounds.append((symbols, bound))
+                for symbol in word.symbols:
+                    row = [row for row in rows if symbol.bounding_box.vertices[-1].y < row][0]
+                    col = [col for col in columns if symbol.bounding_box.vertices[0].x < col][0]
 
-bounds = all_new_bounds
-image  = draw_boxes(image, bounds, 'green')
+                    grid[row][col].append(symbol)
+                    
+image = cv2.imread('cropped.png')
 
-sections = {x: [] for x in rows}
-for symbols, bound in bounds:
-    y = max(v.y for v in bound.vertices)
-    for pos in rows:
-        if y < pos:
-            sections[pos].append((symbols, bound))
-            break
+for i in range(1, len(rows)):
+    for j in range(1, len(columns)):
+        if not grid[rows[i]][columns[j]]:
+            confidence = 0
+        else:
+            confidence = numpy.average([x.confidence for x in grid[rows[i]][columns[j]]])
 
-sections = [sorted(section, key=lambda item: item[1].vertices[0].x) for section in sections.values()]
-groups   = {row: {col: [] for col in columns} for row in rows}
-entries  = set()
+        if confidence < 0.8:
+            roi    = image[rows[i-1]+2:rows[i]-2, columns[j-1]+2:columns[j]-2]
+            output = pytesseract.image_to_string(roi, lang='eng', config='--oem 1 --psm 10')
+            print(f"'{output.strip()}'", end=', ')
+            continue
 
-for i, section in enumerate(sections):
-    for symbols, bound in section:
-        x = min(v.x for v in bound.vertices)
-    
-        for col in columns:
-            if x < col:
-                entry = (rows[i], col, ''.join(x.text for x in symbols))
+        for symbol in grid[rows[i]][columns[j]]:
+            print(symbol.text, end='')
+            vertices = numpy.array([[vertex.x, vertex.y] for vertex in symbol.bounding_box.vertices], numpy.int32)
 
-                if entry not in entries:
-                    groups[rows[i]][col].append(entry[2])
-                    entries.add(entry)
+            cv2.polylines(
+                image,
+                pts = [vertices.reshape((-1, 1, 2))],
+                color = (255, 255, 255) if symbol.confidence > 0.95 else (0, 255, 0) if symbol.confidence > 0.90 else (0, 255, 255) if symbol.confidence > 0.85 else (0, 128, 255) if symbol.confidence > 0.8 else (0, 0, 255),
+                thickness = 1,
+                isClosed = True
+            )
+        print(', ', end='')
+    print()
 
-                break
+cv2.destroyAllWindows()
 
-if subcategory == "passer":
-    print("{:<30} {:^10} {:^10} {:^10} {:^10} {:^10} {:^10} {:^10} {:^10} {:^10}".format('Player', 'QBR', 'Comp.', 'Att.', 'TDs', 'Ints', 'Sacks', 'Yards', 'Long', 'Conflicts'))
-    
-    for cols in groups.values():
-        name, qbr, comp_str, tds, ints, sacks, yards, long, *conflicts = (''.join(x) if x else 'X' for x in cols.values())
+cols = [grid[row][col] for row in rows for col in grid[row]]
+conf = numpy.average([symbol.confidence for col in cols for symbol in col])
+print(f"Confidence: {conf:.2%}")
 
-        name = re.sub(r'(\d+)?@', '', name)
-        comp, att = re.search(r'\d+%\((\d+)\/(\d+)\)', comp_str).groups()
-
-        conflicts = [x for x in conflicts if x and x != 'X']
-
-        print(f"{name:<30} {qbr:^10} {comp:^10} {att:^10} {tds:^10} {ints:^10} {sacks:^10} {yards:^10} {long:^10} {conflicts or ''}")
-
-image.save('result.png')
+cv2.imwrite('result.png', image)
