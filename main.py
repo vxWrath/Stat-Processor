@@ -138,9 +138,9 @@ async def get_stats(path: str, retreive: bool):
     file_bytes = file.fp.read()
     image      = cv2.imdecode(numpy.frombuffer(file_bytes, numpy.uint8), cv2.IMREAD_COLOR)
 
-    print("Preparing Image...")
     category, subcategory = await find_stat_category(loop, image)
 
+    print(f"      Image: {path}")
     print(f"   Category: {category}")
     print(f"Subcategory: {subcategory}\n")
     
@@ -170,17 +170,16 @@ def find_name_index(grid, rows: List[int], columns: List[int]) -> int:
 async def process_cell(image: numpy.ndarray, grid, rows: List[int], columns: List[int], name_index: int, row: int, col: int) -> Dict[str, Any]:
     result = {'cell': (row, col), 'text': '', 'confidence': 0, 'is_name': name_index == columns.index(col)}
 
-    confidence = 0
     if grid[row][col]:
-        confidence = numpy.average([x.confidence for x in grid[row][col]])
+        result['confidence'] = numpy.average([x.confidence for x in grid[row][col]])
         polygons   = [Polygon([(vertex.x, vertex.y) for vertex in symbol.bounding_box.vertices]) for symbol in grid[row][col]]
 
         for first_polygon, second_polygon in itertools.combinations(polygons, 2):
             if (first_polygon.intersection(second_polygon).area / second_polygon.area) >= 0.5:
-                confidence = 0
+                result['confidence'] = 0
                 break
 
-    if not result['is_name'] and confidence < 0.8:
+    if not result['is_name'] and result['confidence'] < 0.8:
         roi    = image[rows[rows.index(row)-1]+2:row-2, columns[columns.index(col)-1]+2:col-2]
         output = await asyncio.to_thread(pytesseract.image_to_data, image=roi, lang='eng', config='--oem 1 --psm 10', output_type=pytesseract.Output.DICT)
 
@@ -270,5 +269,6 @@ async def main(retreive: bool, path: Optional[str]=None):
 
     for path in os.listdir('stats'):
         await get_stats(path=f"stats/{path}", retreive=retreive)
+        print()
 
-asyncio.run(main(retreive=True, path='stats/d2.png'))
+asyncio.run(main(retreive=True))
