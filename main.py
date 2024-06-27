@@ -1,14 +1,17 @@
 import asyncio
 import cv2
 import discord
+import itertools
 import numpy
-import pytesseract
 import os
+import pickle
+import pytesseract
 import re
 
 from concurrent.futures import ThreadPoolExecutor
 from google.cloud import vision_v1
-from typing import List, Optional, Dict
+from shapely.geometry import Polygon
+from typing import List, Dict, Any, Optional
 
 import pickle
 
@@ -17,6 +20,9 @@ os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = f"credentials.json"
 
 categories    = ["my stats", "current game", "server", "global"]
 subcategories = ["passer", "runner", "receiver", "corner", "defender", "kicker", "other"]
+
+AMOUNTS = {"passer": 8, "receiver": 8, "corner": 8, "defender": 7}
+REPLACEMENTS = ['o', 'о']
 
 async def find_stat_category(loop: asyncio.AbstractEventLoop, image):
     category_text = subcategory_text = None
@@ -154,6 +160,48 @@ async def get_stats(path: str, retreive: bool):
         cv2.imshow(path, sections)
         cv2.waitKey(0) 
         cv2.destroyAllWindows()
+
+def find_name_index(grid, rows: List[int], columns: List[int]) -> int:
+    for row, col in itertools.product(range(1, len(rows)), range(1, len(columns))):
+        word = ''.join([symbol.text for symbol in grid[rows[row]][columns[col]]]).strip()
+        if re.search(r'(\d+)?\s?@', word):
+            return col
+        
+async def process_cell(image: numpy.ndarray, grid, rows: List[int], columns: List[int], name_index: int, row: int, col: int) -> Dict[str, Any]:
+    result = {'cell': (row, col), 'text': '', 'confidence': 0, 'is_name': name_index == columns.index(col)}
+
+    confidence = 0
+    if grid[row][col]:
+        confidence = numpy.average([x.confidence for x in grid[row][col]])
+        polygons   = [Polygon([(vertex.x, vertex.y) for vertex in symbol.bounding_box.vertices]) for symbol in grid[row][col]]
+
+        for first_polygon, second_polygon in itertools.combinations(polygons, 2):
+            if (first_polygon.intersection(second_polygon).area / second_polygon.area) >= 0.5:
+                confidence = 0
+                break
+
+    if not result['is_name'] and confidence < 0.8:
+        roi    = image[rows[rows.index(row)-1]+2:row-2, columns[columns.index(col)-1]+2:col-2]
+        output = await asyncio.to_thread(pytesseract.image_to_data, image=roi, lang='eng', config='--oem 1 --psm 10', output_type=pytesseract.Output.DICT)
+
+        output = [(output['text'][index], output['conf'][index]) for index in range(len(output['text'])) if output['text'][index] and output['conf'][index] > 75]
+
+        if output:
+            result['text'] = ''.join([x[0] for x in output]).strip() + 'ₚ'
+            result['confidence'] = numpy.mean([x[1] for x in output]) / 100
+
+        return result
+    
+    for symbol in grid[row][col]:
+        if not result['is_name'] and symbol.text.lower() in REPLACEMENTS:
+            symbol.text = '0'
+
+        result['text'] += symbol.text
+
+    if grid[row][col]:
+        result['confidence'] = numpy.mean([symbol.confidence for symbol in grid[row][col]])
+
+    return result
     
 async def send_to_google(sections, subcategory: str, columns: list, rows: list):
     client  = vision_v1.ImageAnnotatorAsyncClient()
@@ -164,7 +212,7 @@ async def send_to_google(sections, subcategory: str, columns: list, rows: list):
     
     response = await client.batch_annotate_images(requests=[request])
 
-    if True:
+    if False:
         with open('result', 'wb') as f:
             pickle.dump(response.responses[0].full_text_annotation, f)
 
@@ -174,9 +222,7 @@ async def send_to_google(sections, subcategory: str, columns: list, rows: list):
         cv2.imwrite('cropped.png', sections)
 
     grid: Dict[int, Dict[int, List[vision_v1.Symbol]]] = {
-        row: {
-            col: [] for col in columns
-        } for row in rows
+        row: {col: [] for col in columns} for row in rows
     }
 
     entries = set()
@@ -184,38 +230,39 @@ async def send_to_google(sections, subcategory: str, columns: list, rows: list):
         for block in page.blocks:
             for paragraph in block.paragraphs:
                 for word in paragraph.words:
-                    row   = [row for row in rows if word.bounding_box.vertices[-1].y < row][0]
-                    col   = [col for col in columns if word.bounding_box.vertices[0].x < col][0]
+                    row = next(r for r in rows if word.bounding_box.vertices[-1].y < r)
+                    col = next(c for c in columns if word.bounding_box.vertices[0].x < c)
                     entry = (row, col, ''.join(x.text for x in word.symbols))
 
                     if entry in entries:
                         continue
-
                     entries.add(entry)
-
+                    
                     for symbol in word.symbols:
-                        row = [row for row in rows if symbol.bounding_box.vertices[-1].y < row][0]
-                        col = [col for col in columns if symbol.bounding_box.vertices[0].x < col][0]
-
+                        row = next(r for r in rows if symbol.bounding_box.vertices[-1].y < r)
+                        col = next(c for c in columns if symbol.bounding_box.vertices[0].x < c)
                         grid[row][col].append(symbol)
 
-    for i in range(1, len(rows)):
-        for j in range(1, len(columns)):
-            if not grid[rows[i]][columns[j]]:
-                confidence = 0
+    name_index = find_name_index(grid, rows, columns)
+    results    = await asyncio.gather(*[
+        process_cell(sections, grid, rows, columns, name_index, rows[row], columns[col]) 
+        for row, col in itertools.product(range(1, len(rows)), range(name_index, name_index + AMOUNTS.get(subcategory)))
+    ])
+
+    for _, data in itertools.groupby(results, key=lambda result: result['cell'][0]):
+        data = sorted(data, key=lambda result: result['cell'][1])
+        
+        for i in range(len(data)):
+            if i == 0:
+                print(f"{data[i]['text'].replace('@', ' @'):<22}", end=' ')
             else:
-                confidence = numpy.average([x.confidence for x in grid[rows[i]][columns[j]]])
-
-            if confidence < 0.8:
-                roi    = sections[rows[i-1]+2:rows[i]-2, columns[j-1]+2:columns[j]-2]
-                output = pytesseract.image_to_string(roi, lang='eng', config='--oem 1 --psm 10')
-                print(f"'{output.strip()}'", end=', ')
-                continue
-
-            for symbol in grid[rows[i]][columns[j]]:
-                print(symbol.text, end='')
-            print(', ', end='')
+                if data[i]['text']:
+                    print(f"{data[i]['text'].lower():^10}", end=' ')
+                else:
+                    print(f"{data[i]['text'].lower() or '❌':^9}", end=' ')
         print()
+
+    print(f"\nConfidence: {numpy.mean([x['confidence'] for x in results]):.2%}")
     
 async def main(retreive: bool, path: Optional[str]=None):
     if path:
@@ -224,8 +271,4 @@ async def main(retreive: bool, path: Optional[str]=None):
     for path in os.listdir('stats'):
         await get_stats(path=f"stats/{path}", retreive=retreive)
 
-asyncio.run(main(retreive=True, path='stats/c2.png'))
-
-# TODO
-# fix double bounding boxes (run test.py with stats/c2.png to see example)
-# overall refinement
+asyncio.run(main(retreive=True, path='stats/d2.png'))
